@@ -1,6 +1,7 @@
 from __future__ import annotations
 import regex as re
 import heapq
+import multiprocessing
 
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
@@ -11,6 +12,20 @@ class Rev:
     def __lt__(self, other):
         return self.p > other.p
 
+def pretokenize_doc(document: str):
+    word_freq: dict[str, int] = {}
+    word_tokens: dict[str, tuple[bytes, ...]] = {}
+    for word in re.findall(PAT, document):
+        raw = word.encode("utf-8")
+        tokens = tuple(raw[i:i+1] for i in range(len(raw)))
+        
+        if word not in word_freq:
+            word_freq[word] = 1
+            word_tokens[word] = tokens
+        else:
+            word_freq[word] += 1
+    return word_freq, word_tokens
+
 def pretokenize(text:str, special_tokens:list[str]) -> tuple[dict[str, int], dict[str, tuple[bytes, ...]]]:
     if special_tokens and len(special_tokens) > 0:
         seperators  = "|".join(re.escape(st) for st in special_tokens)
@@ -18,19 +33,20 @@ def pretokenize(text:str, special_tokens:list[str]) -> tuple[dict[str, int], dic
     else:
         documents = [text]
 
+    print("documents:", len(documents))
+    with multiprocessing.Pool() as pool:
+        results = pool.map(pretokenize_doc, documents)
+
     # use dict to save space
     word_freq: dict[str, int] = {}
     word_tokens: dict[str, tuple[bytes, ...]] = {}
-    for document in documents:
-        for word in re.findall(PAT, document):
-            raw = word.encode("utf-8")
-            tokens = tuple(raw[i:i+1] for i in range(len(raw)))
-            
-            if word not in word_freq:
-                word_freq[word] = 1
-                word_tokens[word] = tokens
-            else:
-                word_freq[word] += 1
+
+    for local_freq, local_tokens in results:
+        for word, freq in local_freq.items():
+            word_freq[word] = word_freq.get(word, 0) + freq
+
+            if word not in word_tokens:
+                word_tokens[word] = local_tokens[word]
 
     return word_freq, word_tokens
 
@@ -133,6 +149,9 @@ def train_bpe(
         # update vocab and merged
         vocab[len(vocab)] = new_token
         merged.append(max_pair)
+
+        if len(vocab) % 100 == 0:
+            print("Vocab size:", len(vocab))
     
     return vocab, merged
 
