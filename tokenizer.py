@@ -97,7 +97,8 @@ class Tokenizer:
     memory.
     '''
     def encode_iterable(self, iteratable: Iterable[str]) -> Iterable[int]:
-        pass
+        for text in iteratable:
+            yield from self.encode(text)
 
     '''
     Decode a sequence of token IDs into text.
