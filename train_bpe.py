@@ -2,6 +2,7 @@ from __future__ import annotations
 import regex as re
 import heapq
 import multiprocessing
+import pickle
 
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
@@ -154,6 +155,24 @@ def train_bpe(
             print("Vocab size:", len(vocab))
     
     return vocab, merged
+
+def save_vocab(vocab: dict[int, bytes], filepath_vocab):
+    with open(filepath_vocab, "wb") as f:
+            pickle.dump(vocab, f)
+
+def save_merges(merges: list[tuple[bytes, bytes]], filepath_merges):
+    with open(filepath_merges, "wb") as f:
+        pickle.dump(merges, f)
+
+def load_vocab(filepath_vocab):
+    with open(filepath_vocab, "rb") as f:
+        vocab = pickle.load(f)
+        return vocab
+
+def save_merges(filepath_merges):
+    with open(filepath_merges, "rb") as f:
+        merges = pickle.load(f)
+        return merges
 
 def main():
     # test your code here
