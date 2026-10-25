@@ -16,8 +16,8 @@ from embedding import Embedding
 from rmsnorm import RMSNorm
 from swiGlu import SiLU, SwiGLU
 from rope import RotaryPositionalEmbedding
-from attention import softmax, scaled_dot_product_attention
-
+from attention import softmax, scaled_dot_product_attention, MultiHeadSelfAttn, MultiHeadSelfAttnWithRope
+from transformer import TransformerBlock
 
 def run_linear(
     d_in: int,
@@ -38,7 +38,8 @@ def run_linear(
         Float[Tensor, "... d_out"]: The transformed output of your linear module.
     """
 
-    l =  Linear(d_in, d_out, weights=weights, device=weights.device, dtype=weights.dtype)
+    l =  Linear(d_in, d_out, device=weights.device, dtype=weights.dtype)
+    l.weight.data = weights
     return l(in_features)
 
 
@@ -61,7 +62,9 @@ def run_embedding(
         Float[Tensor, "... d_model"]: Batch of embeddings returned by your Embedding layer.
     """
 
-    return Embedding(vocab_size, d_model, weights=weights)(token_ids)
+    e = Embedding(vocab_size, d_model)
+    e.weight.data = weights
+    return e(token_ids)
 
 
 def run_swiglu(
@@ -152,8 +155,18 @@ def run_multihead_self_attention(
         Float[Tensor, " ... sequence_length d_model"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    mhsa = MultiHeadSelfAttn(d_model, num_heads)
+    mhsa.Wq.weight.data = q_proj_weight
+    mhsa.Wk.weight.data = k_proj_weight
+    mhsa.Wv.weight.data = v_proj_weight
+    mhsa.Wo.weight.data = o_proj_weight
 
+    b, l, _ = in_features.shape
+    causal_mask = torch.tril(
+        torch.ones(b, l, l, dtype=torch.bool, device=in_features.device)
+    )
+
+    return mhsa(in_features, causal_mask)
 
 def run_multihead_self_attention_with_rope(
     d_model: int,
@@ -192,8 +205,18 @@ def run_multihead_self_attention_with_rope(
         Float[Tensor, " ... sequence_length d_model"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    attn_with_rope = MultiHeadSelfAttnWithRope(d_model, num_heads, max_seq_len, theta)
+    attn_with_rope.Wq.weight.data = q_proj_weight
+    attn_with_rope.Wk.weight.data = k_proj_weight
+    attn_with_rope.Wv.weight.data = v_proj_weight
+    attn_with_rope.Wo.weight.data = o_proj_weight
 
+    b, l, _ = in_features.shape
+    causal_mask = torch.tril(
+        torch.ones(b, l, l, dtype=torch.bool, device=in_features.device)
+    )
+
+    return attn_with_rope(in_features, token_positions, causal_mask)
 
 def run_rope(
     d_k: int,
@@ -289,8 +312,30 @@ def run_transformer_block(
         Float[Tensor, "batch sequence_length d_model"] Tensor with the output of
         running the Transformer block on the input features while using RoPE.
     """
-    raise NotImplementedError
+    block = TransformerBlock(
+        d_model=d_model, 
+        num_heads=num_heads, 
+        d_ff=d_ff, 
+        max_seq_len=max_seq_len, 
+        theta=theta, 
+        device=in_features.device)
+    
+    block.attention.Wq.weight.data = weights['attn.q_proj.weight']
+    block.attention.Wk.weight.data = weights['attn.k_proj.weight']
+    block.attention.Wv.weight.data = weights['attn.v_proj.weight']
+    block.attention.Wo.weight.data = weights['attn.output_proj.weight']
+    block.rms_norm_attn.g.data = weights['ln1.weight']
+    block.ffn.w1.data = weights['ffn.w1.weight']
+    block.ffn.w2.data = weights['ffn.w2.weight']
+    block.ffn.w3.data = weights['ffn.w3.weight']
+    block.rms_norm_ffn.g.data = weights['ln2.weight']
 
+    b, l, _ = in_features.shape
+    mask = torch.tril(
+        torch.ones(b, l, l, dtype=torch.bool, device=in_features.device)
+    )
+
+    return block(x=in_features, mask=mask)
 
 def run_transformer_lm(
     vocab_size: int,
@@ -394,7 +439,9 @@ def run_rmsnorm(
         Float[Tensor,"... d_model"]: Tensor of with the same shape as `in_features` with the output of running
         RMSNorm of the `in_features`.
     """
-    return RMSNorm(d_model, eps, weights, device=weights.device, dtype=weights.dtype).forward(in_features)
+    norm = RMSNorm(d_model, eps, device=weights.device, dtype=weights.dtype)
+    norm.g.data = weights
+    return norm(in_features)
 
 
 def run_silu(in_features: Float[Tensor, " ..."]) -> Float[Tensor, " ..."]:
