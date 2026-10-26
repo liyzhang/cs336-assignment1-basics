@@ -8,5 +8,5 @@ class RMSNorm(torch.nn.Module):
         self.g = torch.nn.Parameter(torch.ones(d_model, device=device, dtype=dtype))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        norm = (torch.sum((x**2), dim= -1, keepdim=True) + self.eps)/self.d_model
+        norm = (torch.sum((x**2), dim= -1, keepdim=True))/self.d_model + self.eps
         return self.g * x / torch.sqrt(norm)
