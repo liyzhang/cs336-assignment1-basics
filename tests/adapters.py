@@ -17,7 +17,7 @@ from rmsnorm import RMSNorm
 from swiGlu import SiLU, SwiGLU
 from rope import RotaryPositionalEmbedding
 from attention import softmax, scaled_dot_product_attention, MultiHeadSelfAttn, MultiHeadSelfAttnWithRope
-from transformer import TransformerBlock
+from transformer import TransformerBlock, TransformerLM
 
 def run_linear(
     d_in: int,
@@ -325,17 +325,17 @@ def run_transformer_block(
     block.attention.Wv.weight.data = weights['attn.v_proj.weight']
     block.attention.Wo.weight.data = weights['attn.output_proj.weight']
     block.rms_norm_attn.g.data = weights['ln1.weight']
-    block.ffn.w1.data = weights['ffn.w1.weight']
-    block.ffn.w2.data = weights['ffn.w2.weight']
-    block.ffn.w3.data = weights['ffn.w3.weight']
+    block.ffn.w1.weight.data = weights['ffn.w1.weight']
+    block.ffn.w2.weight.data = weights['ffn.w2.weight']
+    block.ffn.w3.weight.data = weights['ffn.w3.weight']
     block.rms_norm_ffn.g.data = weights['ln2.weight']
 
     b, l, _ = in_features.shape
-    mask = torch.tril(
+    causal_mask = torch.tril(
         torch.ones(b, l, l, dtype=torch.bool, device=in_features.device)
     )
 
-    return block(x=in_features, mask=mask)
+    return block(x=in_features, causal_mask=causal_mask)
 
 def run_transformer_lm(
     vocab_size: int,
@@ -416,7 +416,38 @@ def run_transformer_lm(
         Float[Tensor, "batch_size sequence_length vocab_size"]: Tensor with the predicted unnormalized
         next-word distribution for each token.
     """
-    raise NotImplementedError
+    lm = TransformerLM(
+            d_model=d_model, 
+            num_heads=num_heads, 
+            d_ff=d_ff, 
+            max_seq_len=context_length, 
+            num_layers=num_layers,
+            vocab_size=vocab_size,
+            theta=rope_theta, 
+            device=in_indices.device)
+        
+    lm.embedding.weight.data = weights['token_embeddings.weight']
+    for i in range(num_layers):
+        lm.blocks[i].attention.Wq.weight.data = weights[f'layers.{i}.attn.q_proj.weight']
+        lm.blocks[i].attention.Wk.weight.data = weights[f'layers.{i}.attn.k_proj.weight']
+        lm.blocks[i].attention.Wv.weight.data = weights[f'layers.{i}.attn.v_proj.weight']
+        lm.blocks[i].attention.Wo.weight.data = weights[f'layers.{i}.attn.output_proj.weight']
+        lm.blocks[i].rms_norm_attn.g.data = weights[f'layers.{i}.ln1.weight']
+        lm.blocks[i].ffn.w1.weight.data = weights[f'layers.{i}.ffn.w1.weight']
+        lm.blocks[i].ffn.w2.weight.data = weights[f'layers.{i}.ffn.w2.weight']
+        lm.blocks[i].ffn.w3.weight.data = weights[f'layers.{i}.ffn.w3.weight']
+        lm.blocks[i].rms_norm_ffn.g.data = weights[f'layers.{i}.ln2.weight']
+
+    lm.output_norm.g.data = weights['ln_final.weight']
+    lm.output.weight.data = weights['lm_head.weight']
+
+    # def forward(self, x: torch.tensor, mask: torch.tensor) -> torch.tensor:
+    b, l = in_indices.shape
+    causal_mask = torch.tril(
+        torch.ones(b, l, l, dtype=torch.bool, device=in_indices.device)
+    )
+    
+    return lm(x = in_indices, causal_mask = causal_mask)
 
 
 def run_rmsnorm(
