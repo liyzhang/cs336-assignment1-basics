@@ -4,7 +4,6 @@ from swiGlu import SwiGLU
 from rmsnorm import RMSNorm
 from embedding import Embedding
 from linear import Linear
-from attention import softmax
 
 class TransformerBlock(torch.nn.Module):
     def __init__(self, d_model:int, num_heads:int, d_ff:int, eps=0.000001, theta:int | None = None, max_seq_len: int | None = None, device = None):
@@ -28,7 +27,7 @@ class TransformerBlock(torch.nn.Module):
     def forward(self, x: torch.tensor, causal_mask: torch.tensor) -> torch.tensor:
         '''
             x: b, l, d_model
-            mask: b, l, l
+            causal_mask: b, l, l
         '''
         if self.use_rope:
             token_positions = torch.arange(x.shape[1], device=x.device).unsqueeze(0) # token_position: 1 x l, broadcast = b x l
@@ -72,12 +71,12 @@ class TransformerLM(torch.nn.Module):
     def forward(self, x: torch.tensor, causal_mask: torch.tensor) -> torch.tensor:
         '''
             x: b x l 
-            mask: b x l
+            causal_mask: b x l x l
         '''
         hidden = self.embedding(x) # hidden: b x l x d_model
         for block in self.blocks:
             hidden = block(hidden, causal_mask) # hidden: b x l x d_model
 
         hidden = self.output_norm(hidden)
-        logits = self.output(hidden)
-        return softmax(logits, dim=1)
+        return self.output(hidden)
+        # return softmax(self.output(hidden), dim=-1)
