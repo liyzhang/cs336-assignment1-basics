@@ -14,7 +14,7 @@ def softmax(logits: torch.Tensor, dim: int):
     return logits_exp / sum
 
 
-def scaled_dot_product_attention(Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor, mask: torch.Tensor = None) -> torch.Tensor:
+def scaled_dot_product_attention(Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor, causal_mask: torch.Tensor = None) -> torch.Tensor:
     """
     Given key (K), query (Q), and value (V) tensors, return
         the output of your scaled dot product attention implementation.
@@ -30,8 +30,8 @@ def scaled_dot_product_attention(Q: torch.Tensor, K: torch.Tensor, V: torch.Tens
     
     scores = Q @ K.transpose(-1, -2)
     scaled = scores / math.sqrt(Q.shape[-1])
-    if mask is not None:
-        scaled = torch.where(mask, scaled, float('-inf'))
+    if causal_mask is not None:
+        scaled = torch.where(causal_mask, scaled, float('-inf'))
 
     weights = softmax(scaled, dim=-1)
     return weights @ V
@@ -47,7 +47,7 @@ class MultiHeadSelfAttn(torch.nn.Module):
         self.Wv = Linear(d_model, d_model, device=device, dtype=dtype)
         self.Wo = Linear(d_model, d_model, device=device, dtype=dtype)
 
-    def forward(self, x: torch.Tensor, mask: torch.Tensor = None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, causal_mask: torch.Tensor = None) -> torch.Tensor:
         b, l, d_h = x.shape[0], x.shape[1], self.d_model // self.num_heads
         
         Q, K, V = self.Wq(x), self.Wk(x), self.Wv(x) # b, l, d_model
@@ -55,11 +55,11 @@ class MultiHeadSelfAttn(torch.nn.Module):
         K = K.view(b, l, self.num_heads, d_h).transpose(1, 2) # b, h, l, d_h
         V = V.view(b, l, self.num_heads, d_h).transpose(1, 2) # b, h, l, d_h
 
-        if mask is not None:
-            mask = mask.unsqueeze(1)  # (b, 1, l, l)
+        if causal_mask is not None:
+            causal_mask = causal_mask.unsqueeze(1)  # (b, 1, l, l)
             # mask = mask.expand(-1, self.num_heads, -1, -1)  # (b, num_heads, l, l)
         
-        H = scaled_dot_product_attention(Q, K, V, mask) # b X h X l x d_h
+        H = scaled_dot_product_attention(Q, K, V, causal_mask) # b X h X l x d_h
         H = H.transpose(1, 2) # b x l x h x d_h
         H = H.flatten(start_dim=2) # b x l x d_model
         
@@ -81,7 +81,7 @@ class MultiHeadSelfAttnWithRope(torch.nn.Module):
 
         self.rope = RotaryPositionalEmbedding(theta=theta, d_k=d_model//num_heads, max_seq_len=max_seq_len, device=device)
 
-    def forward(self, x: torch.Tensor, token_positions: torch.Tensor, mask: torch.Tensor = None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, token_positions: torch.Tensor, causal_mask: torch.Tensor = None) -> torch.Tensor:
         b, l, _ = x.shape
         d_h = self.d_model // self.num_heads
 
@@ -96,10 +96,10 @@ class MultiHeadSelfAttnWithRope(torch.nn.Module):
         Q = self.rope(Q, token_positions)
         K = self.rope(K, token_positions)
 
-        if mask is not None: # (b, l, l)
-            mask = mask.unsqueeze(1)  # (b, 1, l, l)
+        if causal_mask is not None: # (b, l, l)
+            causal_mask = causal_mask.unsqueeze(1)  # (b, 1, l, l)
 
-        H = scaled_dot_product_attention(Q, K, V, mask) # (b, h, l, d_h)
+        H = scaled_dot_product_attention(Q, K, V, causal_mask) # (b, h, l, d_h)
         H = H.transpose(1, 2) # (b, l, h, d_h)
         H = H.flatten(start_dim=2) # (b, l, d_model)
 
