@@ -6,7 +6,7 @@ from embedding import Embedding
 from linear import Linear
 
 class TransformerBlock(torch.nn.Module):
-    def __init__(self, d_model:int, num_heads:int, d_ff:int, eps=0.000001, theta:int | None = None, max_seq_len: int | None = None, device = None):
+    def __init__(self, d_model:int, num_heads:int, d_ff:int, eps=1e-5, theta:int | None = None, max_seq_len: int | None = None, device = None):
         super().__init__()
         self.d_model = d_model
         self.num_heads = num_heads
@@ -43,7 +43,7 @@ class TransformerBlock(torch.nn.Module):
 
 
 class TransformerLM(torch.nn.Module):
-    def __init__(self, d_model, num_heads, d_ff, max_seq_len: int, num_layers: int, vocab_size: int, eps=0.000001, theta: int = 10000, device=None) -> None:
+    def __init__(self, d_model, num_heads, d_ff, max_seq_len: int, num_layers: int, vocab_size: int, eps=1e-5, theta: int = 10000, device=None) -> None:
         super().__init__()
         self.d_model = d_model
         self.num_heads = num_heads
