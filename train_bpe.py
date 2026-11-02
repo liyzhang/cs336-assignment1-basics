@@ -169,7 +169,7 @@ def load_vocab(filepath_vocab):
         vocab = pickle.load(f)
         return vocab
 
-def save_merges(filepath_merges):
+def load_merges(filepath_merges):
     with open(filepath_merges, "rb") as f:
         merges = pickle.load(f)
         return merges
