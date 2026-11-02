@@ -20,6 +20,7 @@ from attention import scaled_dot_product_attention, MultiHeadSelfAttn, MultiHead
 from transformer import TransformerBlock, TransformerLM
 from nn_utils import softmax, cross_entropy
 from adamw import AdamW, get_lr_cosine_schedue, gradient_clipping
+from train import get_batch
 
 
 def run_linear(
@@ -505,7 +506,7 @@ def run_get_batch(
         is the sampled input sequences, and the second tuple item is the corresponding
         language modeling labels.
     """
-    raise NotImplementedError
+    return get_batch(dataset, batch_size, context_length, device)
 
 
 def run_softmax(in_features: Float[Tensor, " ..."], dim: int) -> Float[Tensor, " ..."]:
