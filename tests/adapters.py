@@ -16,8 +16,11 @@ from embedding import Embedding
 from rmsnorm import RMSNorm
 from swiGlu import SiLU, SwiGLU
 from rope import RotaryPositionalEmbedding
-from attention import softmax, scaled_dot_product_attention, MultiHeadSelfAttn, MultiHeadSelfAttnWithRope
+from attention import scaled_dot_product_attention, MultiHeadSelfAttn, MultiHeadSelfAttnWithRope
 from transformer import TransformerBlock, TransformerLM
+from nn_utils import softmax, cross_entropy
+from adamw import AdamW, get_lr_cosine_schedue, gradient_clipping
+
 
 def run_linear(
     d_in: int,
@@ -38,7 +41,7 @@ def run_linear(
         Float[Tensor, "... d_out"]: The transformed output of your linear module.
     """
 
-    l =  Linear(d_in, d_out, device=weights.device, dtype=weights.dtype)
+    l = Linear(d_in, d_out, device=weights.device, dtype=weights.dtype)
     l.weight.data = weights
     return l(in_features)
 
@@ -96,12 +99,13 @@ def run_swiglu(
     # swiglu.w1.weight.data = w1_weight
     # swiglu.w2.weight.data = w2_weight
     # swiglu.w3.weight.data = w3_weight
-    
+
     swiGlu = SwiGLU(d_model, d_ff)
     swiGlu.w1.weight.data = w1_weight
     swiGlu.w2.weight.data = w2_weight
     swiGlu.w3.weight.data = w3_weight
     return swiGlu(in_features)
+
 
 def run_scaled_dot_product_attention(
     Q: Float[Tensor, " ... queries d_k"],
@@ -162,11 +166,10 @@ def run_multihead_self_attention(
     mhsa.Wo.weight.data = o_proj_weight
 
     b, l, _ = in_features.shape
-    causal_mask = torch.tril(
-        torch.ones(b, l, l, dtype=torch.bool, device=in_features.device)
-    )
+    causal_mask = torch.tril(torch.ones(b, l, l, dtype=torch.bool, device=in_features.device))
 
     return mhsa(in_features, causal_mask)
+
 
 def run_multihead_self_attention_with_rope(
     d_model: int,
@@ -212,11 +215,10 @@ def run_multihead_self_attention_with_rope(
     attn_with_rope.Wo.weight.data = o_proj_weight
 
     b, l, _ = in_features.shape
-    causal_mask = torch.tril(
-        torch.ones(b, l, l, dtype=torch.bool, device=in_features.device)
-    )
+    causal_mask = torch.tril(torch.ones(b, l, l, dtype=torch.bool, device=in_features.device))
 
     return attn_with_rope(in_features, token_positions, causal_mask)
+
 
 def run_rope(
     d_k: int,
@@ -237,7 +239,7 @@ def run_rope(
     Returns:
         Float[Tensor, " ... sequence_length d_k"]: Tensor with RoPEd input.
     """
-    
+
     rope = RotaryPositionalEmbedding(theta=theta, d_k=d_k, max_seq_len=max_seq_len)
     return rope(x=in_query_or_key, token_positions=token_positions)
 
@@ -313,29 +315,24 @@ def run_transformer_block(
         running the Transformer block on the input features while using RoPE.
     """
     block = TransformerBlock(
-        d_model=d_model, 
-        num_heads=num_heads, 
-        d_ff=d_ff, 
-        max_seq_len=max_seq_len, 
-        theta=theta, 
-        device=in_features.device)
-    
-    block.attention.Wq.weight.data = weights['attn.q_proj.weight']
-    block.attention.Wk.weight.data = weights['attn.k_proj.weight']
-    block.attention.Wv.weight.data = weights['attn.v_proj.weight']
-    block.attention.Wo.weight.data = weights['attn.output_proj.weight']
-    block.rms_norm_attn.g.data = weights['ln1.weight']
-    block.ffn.w1.weight.data = weights['ffn.w1.weight']
-    block.ffn.w2.weight.data = weights['ffn.w2.weight']
-    block.ffn.w3.weight.data = weights['ffn.w3.weight']
-    block.rms_norm_ffn.g.data = weights['ln2.weight']
-
-    b, l, _ = in_features.shape
-    causal_mask = torch.tril(
-        torch.ones(b, l, l, dtype=torch.bool, device=in_features.device)
+        d_model=d_model, num_heads=num_heads, d_ff=d_ff, max_seq_len=max_seq_len, theta=theta, device=in_features.device
     )
 
+    block.attention.Wq.weight.data = weights["attn.q_proj.weight"]
+    block.attention.Wk.weight.data = weights["attn.k_proj.weight"]
+    block.attention.Wv.weight.data = weights["attn.v_proj.weight"]
+    block.attention.Wo.weight.data = weights["attn.output_proj.weight"]
+    block.rms_norm_attn.g.data = weights["ln1.weight"]
+    block.ffn.w1.weight.data = weights["ffn.w1.weight"]
+    block.ffn.w2.weight.data = weights["ffn.w2.weight"]
+    block.ffn.w3.weight.data = weights["ffn.w3.weight"]
+    block.rms_norm_ffn.g.data = weights["ln2.weight"]
+
+    b, l, _ = in_features.shape
+    causal_mask = torch.tril(torch.ones(b, l, l, dtype=torch.bool, device=in_features.device))
+
     return block(x=in_features, causal_mask=causal_mask)
+
 
 def run_transformer_lm(
     vocab_size: int,
@@ -417,37 +414,36 @@ def run_transformer_lm(
         next-word distribution for each token.
     """
     lm = TransformerLM(
-            d_model=d_model, 
-            num_heads=num_heads, 
-            d_ff=d_ff, 
-            max_seq_len=context_length, 
-            num_layers=num_layers,
-            vocab_size=vocab_size,
-            theta=rope_theta, 
-            device=in_indices.device)
-        
-    lm.embedding.weight.data = weights['token_embeddings.weight']
-    for i in range(num_layers):
-        lm.blocks[i].attention.Wq.weight.data = weights[f'layers.{i}.attn.q_proj.weight']
-        lm.blocks[i].attention.Wk.weight.data = weights[f'layers.{i}.attn.k_proj.weight']
-        lm.blocks[i].attention.Wv.weight.data = weights[f'layers.{i}.attn.v_proj.weight']
-        lm.blocks[i].attention.Wo.weight.data = weights[f'layers.{i}.attn.output_proj.weight']
-        lm.blocks[i].rms_norm_attn.g.data = weights[f'layers.{i}.ln1.weight']
-        lm.blocks[i].ffn.w1.weight.data = weights[f'layers.{i}.ffn.w1.weight']
-        lm.blocks[i].ffn.w2.weight.data = weights[f'layers.{i}.ffn.w2.weight']
-        lm.blocks[i].ffn.w3.weight.data = weights[f'layers.{i}.ffn.w3.weight']
-        lm.blocks[i].rms_norm_ffn.g.data = weights[f'layers.{i}.ln2.weight']
+        d_model=d_model,
+        num_heads=num_heads,
+        d_ff=d_ff,
+        max_seq_len=context_length,
+        num_layers=num_layers,
+        vocab_size=vocab_size,
+        theta=rope_theta,
+        device=in_indices.device,
+    )
 
-    lm.output_norm.g.data = weights['ln_final.weight']
-    lm.output.weight.data = weights['lm_head.weight']
+    lm.embedding.weight.data = weights["token_embeddings.weight"]
+    for i in range(num_layers):
+        lm.blocks[i].attention.Wq.weight.data = weights[f"layers.{i}.attn.q_proj.weight"]
+        lm.blocks[i].attention.Wk.weight.data = weights[f"layers.{i}.attn.k_proj.weight"]
+        lm.blocks[i].attention.Wv.weight.data = weights[f"layers.{i}.attn.v_proj.weight"]
+        lm.blocks[i].attention.Wo.weight.data = weights[f"layers.{i}.attn.output_proj.weight"]
+        lm.blocks[i].rms_norm_attn.g.data = weights[f"layers.{i}.ln1.weight"]
+        lm.blocks[i].ffn.w1.weight.data = weights[f"layers.{i}.ffn.w1.weight"]
+        lm.blocks[i].ffn.w2.weight.data = weights[f"layers.{i}.ffn.w2.weight"]
+        lm.blocks[i].ffn.w3.weight.data = weights[f"layers.{i}.ffn.w3.weight"]
+        lm.blocks[i].rms_norm_ffn.g.data = weights[f"layers.{i}.ln2.weight"]
+
+    lm.output_norm.g.data = weights["ln_final.weight"]
+    lm.output.weight.data = weights["lm_head.weight"]
 
     # def forward(self, x: torch.tensor, mask: torch.tensor) -> torch.tensor:
     b, l = in_indices.shape
-    causal_mask = torch.tril(
-        torch.ones(b, l, l, dtype=torch.bool, device=in_indices.device)
-    )
-    
-    return lm(x = in_indices, causal_mask = causal_mask)
+    causal_mask = torch.tril(torch.ones(b, l, l, dtype=torch.bool, device=in_indices.device))
+
+    return lm(x=in_indices, causal_mask=causal_mask)
 
 
 def run_rmsnorm(
@@ -543,7 +539,7 @@ def run_cross_entropy(
     Returns:
         Float[Tensor, ""]: The average cross-entropy loss across examples.
     """
-    raise NotImplementedError
+    return cross_entropy(inputs, targets)
 
 
 def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float) -> None:
@@ -555,14 +551,14 @@ def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm:
 
     The gradients of the parameters (parameter.grad) should be modified in-place.
     """
-    raise NotImplementedError
+    gradient_clipping(params=parameters, max_l2_norm=max_l2_norm)
 
 
 def get_adamw_cls() -> Any:
     """
     Returns a torch.optim.Optimizer that implements AdamW.
     """
-    raise NotImplementedError
+    return AdamW
 
 
 def run_get_lr_cosine_schedule(
@@ -590,7 +586,9 @@ def run_get_lr_cosine_schedule(
     Returns:
         Learning rate at the given iteration under the specified schedule.
     """
-    raise NotImplementedError
+    return get_lr_cosine_schedue(
+        it, lr_max=max_learning_rate, lr_min=min_learning_rate, T_w=warmup_iters, T_c=cosine_cycle_iters
+    )
 
 
 def run_save_checkpoint(

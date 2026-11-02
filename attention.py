@@ -2,17 +2,7 @@ import torch
 import math
 from linear import Linear
 from rope import RotaryPositionalEmbedding
-
-def softmax(logits: torch.Tensor, dim: int):
-    """
-    e^x_i  / sum_j e^x_j
-    """
-    # for numerical stability
-    torch_max = torch.max(logits, dim=dim, keepdim=True).values
-    logits_exp = torch.exp(logits - torch_max)
-    sum = logits_exp.sum(dim=dim, keepdim=True)
-    return logits_exp / sum
-
+from nn_utils import softmax
 
 def scaled_dot_product_attention(Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor, causal_mask: torch.Tensor = None) -> torch.Tensor:
     """
