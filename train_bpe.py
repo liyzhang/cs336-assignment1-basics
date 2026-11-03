@@ -8,15 +8,19 @@ import pickle
 import os
 import psutil
 import sys
-
-_process = psutil.Process(os.getpid())
-
+import resource
 
 def profile_mem(stage):
-    rss = _process.memory_info().rss / 1024**3
+    p = psutil.Process(os.getpid())
+    rss = p.memory_info().rss / 1024**3
+    children = sum(c.memory_info().rss for c in p.children(recursive=True))
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024  # Linux reports KB
     available = psutil.virtual_memory().available / 1024**3
 
-    print(f"[MEM] {stage:<30} RSS={rss:6.2f} GB | Available={available:6.2f} GB", flush=True)
+    print(
+        f"[MEM] {stage:<30} RSS={rss:6.2f} GB | workers={children / 1e9:.2f}G | parent_peak={peak / 1e9:.2f}G | Available={available:6.2f} GB",
+        flush=True,
+    )
 
 
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
@@ -30,13 +34,25 @@ class Rev:
         return self.p > other.p
 
 
+def iter_documents(text:str, special_tokens):
+    if not special_tokens:
+        yield [text]
+        return
+    
+    pattern = re.compile("|".join(re.escape(st) for st in special_tokens))
+    start = 0
+    for match in pattern.finditer(text):
+        yield text[start:match.start()]
+        start = match.end()
+    
+    yield text[start:]
+
 def pretokenize_doc(document: str):
     word_freq: dict[str, int] = {}
     word_tokens: dict[str, tuple[bytes, ...]] = {}
     for word in re.findall(PAT, document):
         raw = word.encode("utf-8")
         tokens = tuple(raw[i : i + 1] for i in range(len(raw)))
-
         if word not in word_freq:
             word_freq[word] = 1
             word_tokens[word] = tokens
@@ -46,31 +62,8 @@ def pretokenize_doc(document: str):
 
 
 def pretokenize(text: str, special_tokens: list[str]) -> tuple[dict[str, int], dict[str, tuple[bytes, ...]]]:
-    if special_tokens and len(special_tokens) > 0:
-        seperators = "|".join(re.escape(st) for st in special_tokens)
-        documents = re.split(seperators, text)
-    else:
-        documents = [text]
-
-    print("documents:", len(documents))
-
-    # profile_mem("before_pretokenize_doc")
-    # with multiprocessing.Pool() as pool:
-    #     results = pool.map(pretokenize_doc, documents)
-    # profile_mem("after_pretokenize_doc")
-
-    # # use dict to save space
-    # word_freq: dict[str, int] = {}
-    # word_tokens: dict[str, tuple[bytes, ...]] = {}
-
-    # for local_freq, local_tokens in results:
-    #     for word, freq in local_freq.items():
-    #         word_freq[word] = word_freq.get(word, 0) + freq
-
-    #         if word not in word_tokens:
-    #             word_tokens[word] = local_tokens[word]
-
-    # return word_freq, word_tokens
+    
+    documents = iter_documents(text, special_tokens)
 
     word_freq: dict[str, int] = {}
     word_tokens: dict[str, tuple[bytes, ...]] = {}
@@ -80,6 +73,7 @@ def pretokenize(text: str, special_tokens: list[str]) -> tuple[dict[str, int], d
                 word_freq[word] = word_freq.get(word, 0) + freq
                 if word not in word_tokens:
                     word_tokens[word] = local_tokens[word]
+    
     return word_freq, word_tokens
 
 
@@ -95,13 +89,10 @@ def train_bpe(
     with open(input_path, encoding="utf-8") as f:
         text = f.read()
 
-    print("String size:", sys.getsizeof(text) / 1024**3, "GB")
-    print("Character count:", len(text))
-    profile_mem("after_readfile")
-
     # 2. pretokenize the text, build word_freq, each word is split into tuple(byte, ...)
     profile_mem("before_pretokenize")
     word_freq, word_tokens = pretokenize(text, special_tokens)
+    del text
     profile_mem("after_pretokenize")
 
     # 3. initialize vocab
@@ -140,7 +131,8 @@ def train_bpe(
         l, r = max_pair
         new_token = l + r
         # update pair_freq and pair_occurence
-        for word in pair_occurence[max_pair]:
+        affected_words = list(pair_occurence[max_pair])
+        for word in affected_words:
             count = word_freq[word]
             old = word_tokens[word]
             if len(old) == 1:
@@ -167,6 +159,13 @@ def train_bpe(
             for p in zip(new, new[1:]):
                 deltas[p] = deltas.get(p, 0) + count
 
+            old_pairs = set(zip(old, old[1:]))
+            new_pairs = set(zip(new, new[1:]))
+            for p in old_pairs - new_pairs:
+                pair_occurence[p].discard(word)
+            for p in new_pairs - old_pairs:
+                pair_occurence.setdefault(p, set()).add(word)
+                                
             for p, d in deltas.items():
                 if d == 0:
                     continue
@@ -177,8 +176,7 @@ def train_bpe(
                     pair_occurence.pop(p)
                 else:
                     heapq.heappush(pair_freq_heap, (-pair_freq[p], Rev(p)))
-                    pair_occurence.setdefault(p, set()).add(word)
-
+                
         # pair_freq.pop(max_pair)
         # pair_occurence.pop(max_pair)
 
@@ -216,7 +214,7 @@ def load_merges(filepath_merges):
 
 def main():
     # test your code here
-    input_path = "/workspaces/cs336-assignment1-basics/data/TinyStoriesV2-GPT4-train.txt"
+    input_path = "/workspaces/cs336-assignment1-basics/data/TinyStoriesV2-GPT4-valid.txt"
     vocab_size = 500
     special_tokens = ["<|endoftext|>"]
     vocab, merged = train_bpe(input_path, vocab_size, special_tokens)
