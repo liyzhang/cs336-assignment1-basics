@@ -4,6 +4,27 @@ import heapq
 import multiprocessing
 import pickle
 
+# for memory profileing
+import os
+import psutil
+import sys
+
+_process = psutil.Process(os.getpid())
+
+def profile_mem(stage):
+    rss = _process.memory_info().rss / 1024**3
+    available = psutil.virtual_memory().available / 1024**3
+
+    print(
+        f"[MEM] {stage:<30} "
+        f"RSS={rss:6.2f} GB | "
+        f"Available={available:6.2f} GB",
+        flush=True
+    )
+    
+    
+
+
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
 class Rev:
@@ -35,8 +56,11 @@ def pretokenize(text:str, special_tokens:list[str]) -> tuple[dict[str, int], dic
         documents = [text]
 
     print("documents:", len(documents))
+    
+    profile_mem("before_pretokenize_doc")
     with multiprocessing.Pool() as pool:
         results = pool.map(pretokenize_doc, documents)
+    profile_mem("after_pretokenize_doc")
 
     # use dict to save space
     word_freq: dict[str, int] = {}
@@ -62,11 +86,18 @@ def train_bpe(
   special_tokens: list[str]
 ) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
     # 1. read the file from the input_path, run pre-processing
+    profile_mem("before_readfile")
     with open(input_path, encoding="utf-8") as f:
         text = f.read()
+        
+    print("String size:", sys.getsizeof(text) / 1024**3, "GB")
+    print("Character count:", len(text))
+    profile_mem("after_readfile")
 
     # 2. pretokenize the text, build word_freq, each word is split into tuple(byte, ...)
+    profile_mem("before_pretokenize")
     word_freq, word_tokens = pretokenize(text, special_tokens)
+    profile_mem("after_pretokenize")
 
     # 3. initialize vocab
     vocab: dict[int, bytes] = {}
@@ -176,7 +207,7 @@ def load_merges(filepath_merges):
 
 def main():
     # test your code here
-    input_path = "/workspaces/cs336-assignment1-basics/data/test.txt"
+    input_path = "/workspaces/cs336-assignment1-basics/data/TinyStoriesV2-GPT4-train.txt"
     vocab_size=500
     special_tokens=["<|endoftext|>"]
     vocab, merged =train_bpe(input_path, vocab_size, special_tokens)
