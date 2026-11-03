@@ -74,7 +74,7 @@ def pretokenize(text: str, special_tokens: list[str]) -> tuple[dict[str, int], d
 
     word_freq: dict[str, int] = {}
     word_tokens: dict[str, tuple[bytes, ...]] = {}
-    with multiprocessing.Pool() as pool:
+    with multiprocessing.Pool(processes=10) as pool:
         for local_freq, local_tokens in pool.imap(pretokenize_doc, documents, 100):
             for word, freq in local_freq.items():
                 word_freq[word] = word_freq.get(word, 0) + freq
