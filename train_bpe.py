@@ -7,7 +7,6 @@ import pickle
 # for memory profileing
 import os
 import psutil
-import sys
 import resource
 
 def profile_mem(stage):
@@ -214,7 +213,7 @@ def load_merges(filepath_merges):
 
 def main():
     # test your code here
-    input_path = "/workspaces/cs336-assignment1-basics/data/TinyStoriesV2-GPT4-valid.txt"
+    input_path = "/workspaces/cs336-assignment1-basics/data/TinyStoriesV2-GPT4-train.txt"
     vocab_size = 500
     special_tokens = ["<|endoftext|>"]
     vocab, merged = train_bpe(input_path, vocab_size, special_tokens)
